@@ -77,26 +77,27 @@ const formatWeatherData = (locations: CWALocation[]): FormattedLocation[] => {
 
 // --- Weekly Forecast Logic ---
 
-export const fetchWeeklyForecast = async (locationName: string): Promise<DailyForecast[]> => {
+// Now fetches ALL locations and returns a map
+export const fetchAllWeeklyForecast = async (): Promise<Record<string, DailyForecast[]>> => {
   try {
     const url = `${API_BASE_URL}/${DATA_ID_WEEKLY}?Authorization=${API_KEY}&format=JSON`;
     const response = await fetch(url);
     if (!response.ok) throw new Error("Weekly fetch failed");
     
     const data: WeeklyApiResponse = await response.json();
-    
-    // Find the specific location (Note: Structure is Records -> Locations -> Location[])
-    const locationData = data.records.Locations[0].Location.find(
-        l => l.LocationName === locationName
-    );
+    const locations = data.records.Locations[0].Location;
 
-    if (!locationData) return [];
+    const resultMap: Record<string, DailyForecast[]> = {};
 
-    return parseWeeklyData(locationData);
+    locations.forEach(location => {
+        resultMap[location.LocationName] = parseWeeklyData(location);
+    });
+
+    return resultMap;
 
   } catch (error) {
     console.error("Error fetching weekly forecast:", error);
-    return [];
+    return {};
   }
 };
 
@@ -112,14 +113,20 @@ const parseWeeklyData = (location: any): DailyForecast[] => {
     const popData = getElement("12小時降雨機率")?.Time || [];
     const wsData = getElement("風速")?.Time || [];
 
-    // Iterate through time blocks (usually Wx has the most consistent time blocks)
-    wxData.forEach((block: any, index: number) => {
-        const startTime = new Date(block.StartTime);
-        const hour = startTime.getHours();
-        const dateStr = startTime.toISOString().split('T')[0];
+    // Iterate through time blocks
+    wxData.forEach((block: any) => {
+        if (!block || !block.StartTime) return;
+
+        // Use string splitting for robustness against timezone settings
+        // block.StartTime format: "YYYY-MM-DDTHH:mm:ss+08:00"
+        const timePart = block.StartTime.split('T')[1]; 
+        const hourStr = timePart.split(':')[0];
+        const hour = parseInt(hourStr, 10);
+        
+        const dateStr = block.StartTime.split('T')[0];
 
         // Determine if it's Day (approx 06:00) or Night (approx 18:00)
-        // CWA API typically aligns 06-18 and 18-06.
+        // CWA API typically uses 06:00 and 18:00 for 12h intervals
         const isDay = hour >= 6 && hour < 18;
         const type = isDay ? 'day' : 'night';
 
@@ -127,20 +134,6 @@ const parseWeeklyData = (location: any): DailyForecast[] => {
             dailyMap.set(dateStr, { date: dateStr });
         }
 
-        const dayPart: DayPartForecast = {
-            type,
-            startTime: block.StartTime,
-            wx: block.ElementValue[0].Weather || "",
-            wxCode: parseInt(block.ElementValue[0].WeatherCode || "0", 10),
-            temp: 0, // Placeholder
-            pop: "0",
-            windLevel: "-"
-        };
-
-        // Match other elements by index (assuming arrays are aligned, which they usually are in CWA data)
-        // A safer way is finding matching StartTime, but index usually suffices for this API structure.
-        // Let's try to match by StartTime for robustness.
-        
         const findValue = (source: any[]) => source.find((item: any) => item.StartTime === block.StartTime);
 
         const maxTItem = findValue(maxTData);
@@ -148,24 +141,60 @@ const parseWeeklyData = (location: any): DailyForecast[] => {
         const popItem = findValue(popData);
         const wsItem = findValue(wsData);
 
-        // For Temp: Day use MaxT, Night use MinT (or average, but Max/Min is better for display)
-        // Actually, prompt asks for "Temp". Usually Day=Max, Night=Min is convention for simple view.
+        // Safe extraction with fallbacks
+        const dayPart: DayPartForecast = {
+            type,
+            startTime: block.StartTime,
+            wx: block.ElementValue[0]?.Weather || "未知",
+            wxCode: parseInt(block.ElementValue[0]?.WeatherCode || "0", 10),
+            temp: 0,
+            pop: "0",
+            windLevel: "-"
+        };
+
         if (isDay) {
-             dayPart.temp = parseInt(maxTItem?.ElementValue[0].MaxTemperature || "0", 10);
+             dayPart.temp = parseInt(maxTItem?.ElementValue[0]?.MaxTemperature || "25", 10);
         } else {
-             dayPart.temp = parseInt(minTItem?.ElementValue[0].MinTemperature || "0", 10);
+             dayPart.temp = parseInt(minTItem?.ElementValue[0]?.MinTemperature || "20", 10);
         }
 
-        dayPart.pop = popItem?.ElementValue[0].ProbabilityOfPrecipitation === "-" ? "0" : (popItem?.ElementValue[0].ProbabilityOfPrecipitation || "0");
-        dayPart.windLevel = wsItem?.ElementValue[0].BeaufortScale || "-";
+        // Use safe navigation ?. and fallback to "0"
+        const popVal = popItem?.ElementValue[0]?.ProbabilityOfPrecipitation;
+        dayPart.pop = (popVal === " " || popVal === "-") ? "0" : (popVal || "0");
+        
+        dayPart.windLevel = wsItem?.ElementValue[0]?.BeaufortScale || "-";
 
         const entry = dailyMap.get(dateStr)!;
         if (isDay) entry.day = dayPart;
         else entry.night = dayPart;
     });
 
-    // Convert map to array and sort by date
-    return Array.from(dailyMap.values())
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-        .slice(0, 7); // Limit to 7 days
+    // Filter and Sort
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let results = Array.from(dailyMap.values())
+        .filter(item => {
+            const itemDate = new Date(item.date);
+            itemDate.setHours(0, 0, 0, 0);
+            // Allow today's data to be shown so we don't lose a day if the API includes today
+            return itemDate >= today; 
+        })
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Fix: Remove incomplete future data (e.g., if the last day only has a Night forecast but no Day)
+    if (results.length > 0) {
+        const lastItem = results[results.length - 1];
+        const lastDate = new Date(lastItem.date);
+        lastDate.setHours(0, 0, 0, 0);
+
+        // If it is a future date (not today) and is missing either day or night data, remove it
+        if (lastDate.getTime() > today.getTime()) {
+            if (!lastItem.day || !lastItem.night) {
+                results.pop();
+            }
+        }
+    }
+
+    return results.slice(0, 7); // Ensure we keep up to 7 days
 };

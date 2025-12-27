@@ -1,5 +1,5 @@
 {
-  "name": "Taiwan Weather Forecast",
+  "name": "台灣天氣預報",
   "description": "A real-time weather dashboard for Taiwan cities using the CWA Open Data API, featuring 36-hour forecasts with temperature and precipitation probability.",
   "requestFramePermissions": []
 }

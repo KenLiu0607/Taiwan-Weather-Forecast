@@ -1,18 +1,19 @@
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { fetchWeatherForecast, fetchWeeklyForecast } from './services/weatherService';
+import { fetchWeatherForecast, fetchAllWeeklyForecast } from './services/weatherService';
 import { FormattedLocation, DailyForecast } from './types';
 import { ForecastCard } from './components/ForecastCard';
 import { WeeklyForecast } from './components/WeeklyForecast';
-import { Search, RefreshCw, AlertCircle, ChevronLeft, ChevronRight, MapPin, CloudLightning, Sun, Cloud } from 'lucide-react';
+import { Search, RefreshCw, AlertCircle, ChevronLeft, ChevronRight, MapPin, CloudLightning, Sun, Cloud, Moon } from 'lucide-react';
 
 // --- Background Component ---
 interface WeatherBackgroundProps {
   type: 'sunny' | 'cloudy' | 'rainy';
   isHot: boolean;
+  wxCode?: number;
 }
 
-const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) => {
+const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot, wxCode }) => {
   // Determine gradient based on temperature FIRST, then texture based on weather
   let bgClass = "";
   
@@ -39,6 +40,13 @@ const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) =>
     }
   }
 
+  // Determine if we should show clouds
+  // Show clouds if:
+  // 1. Type is cloudy
+  // 2. Type is rainy
+  // 3. Type is sunny BUT wxCode indicates partly cloudy (2=Mostly Sunny, 3=Partly Cloudy)
+  const showClouds = type === 'cloudy' || type === 'rainy' || (type === 'sunny' && wxCode !== undefined && (wxCode === 2 || wxCode === 3));
+
   return (
     <div className={`fixed inset-0 -z-50 transition-all duration-1000 ${bgClass}`}>
       
@@ -58,7 +66,7 @@ const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) =>
       )}
 
       {/* --- Cloudy/Rainy Clouds --- */}
-      {(type === 'cloudy' || type === 'rainy') && (
+      {showClouds && (
         <>
           <div className="absolute top-[5%] left-[5%] opacity-60 animate-float">
             <Cloud className={`w-80 h-80 ${type === 'rainy' ? 'text-gray-400' : 'text-white'}`} fill="currentColor" />
@@ -76,7 +84,7 @@ const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) =>
       {type === 'rainy' && (
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           {/* Generate rain drops */}
-          {[...Array(30)].map((_, i) => (
+          {[...Array(60)].map((_, i) => (
             <div 
               key={i}
               className={`absolute top-0 w-[2px] rounded-full animate-rain ${isHot ? 'bg-orange-100/40' : 'bg-blue-200/60'}`}
@@ -84,7 +92,8 @@ const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) =>
                 left: `${Math.random() * 100}%`,
                 height: `${Math.random() * 20 + 10}px`,
                 animationDuration: `${Math.random() * 0.5 + 0.5}s`,
-                animationDelay: `${Math.random() * 2}s`
+                // Use NEGATIVE delay so rain is already falling when component mounts
+                animationDelay: `-${Math.random() * 2}s`
               }}
             />
           ))}
@@ -98,11 +107,52 @@ const WeatherBackground: React.FC<WeatherBackgroundProps> = ({ type, isHot }) =>
   );
 };
 
+// --- Transition Overlay Component ---
+const TransitionOverlay: React.FC = () => {
+  const [showMoon, setShowMoon] = useState(false);
+
+  useEffect(() => {
+    // Swap icon halfway through the animation (1.25s of 2.5s)
+    const timer = setTimeout(() => {
+      setShowMoon(true);
+    }, 1250);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[100] pointer-events-auto flex items-center justify-center anim-sky-darken">
+      <div className="absolute w-full h-full overflow-hidden">
+        {/* The Arc Motion Wrapper */}
+        <div className="absolute top-0 left-0 w-20 h-20 anim-celestial-x">
+          <div className="w-full h-full anim-celestial-y">
+            {/* The Glowing Body (Sun morphing to Moon color) */}
+            <div className="w-32 h-32 rounded-full flex items-center justify-center anim-celestial-morph relative">
+               {/* Icon Swap */}
+               <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-1000 ${showMoon ? 'opacity-0' : 'opacity-100'}`}>
+                 <Sun className="w-full h-full text-current animate-spin-slow" />
+               </div>
+               <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-1000 ${showMoon ? 'opacity-100' : 'opacity-0'}`}>
+                 <Moon className="w-full h-full text-current" fill="currentColor" />
+               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="absolute bottom-10 text-white/80 font-bold tracking-[0.5em] animate-pulse">
+        更新天氣資訊...
+      </div>
+    </div>
+  );
+};
+
 
 const App: React.FC = () => {
   const [data, setData] = useState<FormattedLocation[]>([]);
-  const [weeklyData, setWeeklyData] = useState<DailyForecast[]>([]);
+  // Stores weekly data for ALL locations: { "Taipei City": [...], "New Taipei": [...] }
+  const [allWeeklyData, setAllWeeklyData] = useState<Record<string, DailyForecast[]>>({});
+  
   const [loading, setLoading] = useState(true);
+  const [isTransitioning, setIsTransitioning] = useState(false); // New state for full-screen animation
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -110,14 +160,43 @@ const App: React.FC = () => {
   const [isHovered, setIsHovered] = useState(false);
 
   const loadData = async () => {
+    if (isTransitioning) return; // Prevent multiple clicks
+
     setLoading(true);
     setError(null);
+    setIsTransitioning(true); // Start Animation Layer
+
+    const animationDuration = 2500; // 2.5 seconds
+    const startTime = Date.now();
+
     try {
-      const result = await fetchWeatherForecast();
-      setData(result);
+      // Fetch both 36h forecast and Weekly forecast (for all cities) in parallel
+      const [weatherResult, weeklyResult] = await Promise.all([
+        fetchWeatherForecast(),
+        fetchAllWeeklyForecast()
+      ]);
+      
+      // Ensure animation plays for at least the minimum duration
+      const elapsed = Date.now() - startTime;
+      const remaining = animationDuration - elapsed;
+      if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, remaining));
+      }
+
+      setData(weatherResult);
+      setAllWeeklyData(weeklyResult);
+
     } catch (err) {
+      console.error(err);
       setError("無法取得天氣資料，請稍後再試。");
+      // Still wait for animation to finish gracefully even on error
+      const elapsed = Date.now() - startTime;
+      const remaining = animationDuration - elapsed;
+      if (remaining > 0) {
+        await new Promise(resolve => setTimeout(resolve, remaining));
+      }
     } finally {
+      setIsTransitioning(false); // Remove Animation Layer
       setLoading(false);
     }
   };
@@ -132,22 +211,8 @@ const App: React.FC = () => {
     );
   }, [data, filter]);
 
-  // Effect to fetch weekly data when active city changes
-  useEffect(() => {
-    const fetchWeekly = async () => {
-        if (filteredData.length > 0) {
-            const cityName = filteredData[currentIndex].locationName;
-            const wData = await fetchWeeklyForecast(cityName);
-            setWeeklyData(wData);
-        }
-    };
-    
-    // Debounce slightly or check logic to prevent double fetch on init if needed
-    // But usually acceptable for this scale.
-    if (!loading) {
-        fetchWeekly();
-    }
-  }, [currentIndex, filteredData, loading]);
+  // Removed the useEffect that watched currentIndex/filteredData to fetch weekly data.
+  // Data is now fetched once at startup.
 
   useEffect(() => {
     setCurrentIndex(0);
@@ -157,14 +222,14 @@ const App: React.FC = () => {
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     
-    if (isAutoPlaying && !loading && filteredData.length > 1 && !isHovered) {
+    if (isAutoPlaying && !loading && !isTransitioning && filteredData.length > 1 && !isHovered) {
       interval = setInterval(() => {
         setCurrentIndex((prev) => (prev + 1) % filteredData.length);
       }, 5000);
     }
 
     return () => clearInterval(interval);
-  }, [isAutoPlaying, loading, filteredData.length, isHovered]);
+  }, [isAutoPlaying, loading, isTransitioning, filteredData.length, isHovered]);
 
 
   // Determine Theme based on ACTIVE (Center) item
@@ -180,7 +245,12 @@ const App: React.FC = () => {
     
     // Logic for weather type (animations)
     let type: 'sunny' | 'rainy' | 'cloudy' = 'cloudy';
-    if (wx === 1 || wx === 24) type = 'sunny';
+    
+    // Updated Logic:
+    // 01: Sunny, 02: Mostly Sunny, 03: Partly Cloudy, 24: Sunny
+    // All these imply a visible sun, so we set type to 'sunny'.
+    // The WeatherBackground component will handle showing clouds if wx is 2 or 3.
+    if (wx <= 3 || wx === 24) type = 'sunny';
     else if ((wx >= 8 && wx <= 14) || (wx >= 19 && wx <= 22) || wx >= 29) type = 'rainy';
     else type = 'cloudy';
 
@@ -196,6 +266,10 @@ const App: React.FC = () => {
     setCurrentIndex((prev) => (prev - 1 + filteredData.length) % filteredData.length);
     setIsAutoPlaying(false);
   };
+
+  // Get current city's weekly data from the pre-fetched map
+  const currentCityName = filteredData[currentIndex]?.locationName;
+  const currentWeeklyData = currentCityName ? (allWeeklyData[currentCityName] || []) : [];
 
   // Helper to calculate style for each card in the 3D stack
   const getCardStyle = (index: number) => {
@@ -249,30 +323,48 @@ const App: React.FC = () => {
       pointerEvents,
       // Use absolute positioning to stack them
       position: 'absolute' as 'absolute',
-      top: 0,
+      top: '20px', // Added top offset
       left: 0,
       right: 0,
       margin: 'auto',
       width: '100%',
-      maxWidth: '380px', // Matches card max width
+      maxWidth: '380px',
+      height: '320px', // Reduced from 440px to remove whitespace
       transition: 'all 0.7s cubic-bezier(0.25, 0.8, 0.25, 1)',
     };
   };
 
+  // Extract current wxCode for background logic
+  const activeWxCode = filteredData[currentIndex]?.forecasts[0]?.wxValue;
+
   return (
     <div className="min-h-screen relative flex flex-col font-sans overflow-x-hidden overflow-y-auto pb-10">
       
+      {/* Transition Animation Layer */}
+      {isTransitioning && <TransitionOverlay />}
+
       {/* Dynamic Weather Background */}
-      <WeatherBackground type={themeInfo.type} isHot={themeInfo.isHot} />
+      <WeatherBackground type={themeInfo.type} isHot={themeInfo.isHot} wxCode={activeWxCode} />
 
       {/* Glass Header */}
       <header className="pt-6 pb-2 z-30">
         <div className="max-w-2xl mx-auto px-4">
           <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-4 shadow-xl flex flex-col items-center">
-            <h1 className="text-2xl md:text-3xl font-black tracking-widest text-white drop-shadow-lg flex items-center gap-3">
-               <MapPin className="w-8 h-8 text-white" />
-               台灣天氣預報
-            </h1>
+            
+            <div className="flex items-center justify-center gap-4 w-full relative">
+                <h1 className="text-2xl md:text-3xl font-black tracking-widest text-white drop-shadow-lg flex items-center gap-3">
+                   <MapPin className="w-8 h-8 text-white" />
+                   台灣天氣預報
+                </h1>
+                <button 
+                    onClick={loadData} 
+                    className="absolute right-0 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white/90 backdrop-blur-sm border border-white/10 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isTransitioning}
+                    title="重新整理"
+                >
+                    <RefreshCw className={`w-5 h-5 ${loading && !isTransitioning ? 'animate-spin' : ''}`} />
+                </button>
+            </div>
             
             <div className="relative w-full mt-4">
                <div className="flex items-center bg-white/20 backdrop-blur-sm rounded-full px-4 py-2 border border-white/10 focus-within:bg-white/30 transition-colors">
@@ -284,7 +376,6 @@ const App: React.FC = () => {
                     onChange={(e) => setFilter(e.target.value)}
                     className="w-full bg-transparent border-none outline-none text-white placeholder-white/50 font-medium"
                   />
-                  {loading && <RefreshCw className="w-4 h-4 text-white/70 animate-spin" />}
                </div>
             </div>
           </div>
@@ -293,25 +384,25 @@ const App: React.FC = () => {
 
       {/* 3D Carousel Main Content */}
       <main className="flex-shrink-0 flex flex-col items-center justify-center relative w-full z-10 py-6">
-        {error ? (
+        {error && !isTransitioning ? (
           <div className="bg-red-500/80 backdrop-blur text-white px-8 py-6 rounded-2xl flex items-center shadow-2xl">
             <AlertCircle className="w-8 h-8 mr-4" />
             <span className="text-lg font-bold">{error}</span>
             <button onClick={loadData} className="ml-6 bg-white text-red-500 px-4 py-2 rounded-lg font-bold">重試</button>
           </div>
-        ) : loading ? (
+        ) : loading && !isTransitioning ? (
           <div className="flex flex-col items-center text-white my-20">
              <RefreshCw className="w-16 h-16 animate-spin mb-4" />
              <p className="text-xl font-medium tracking-widest">載入天氣資訊中...</p>
           </div>
-        ) : filteredData.length === 0 ? (
+        ) : filteredData.length === 0 && !isTransitioning ? (
           <div className="text-white text-center bg-black/30 backdrop-blur-md p-10 rounded-3xl my-10">
             <CloudLightning className="w-20 h-20 mx-auto mb-4 opacity-70" />
             <p className="text-2xl font-bold">未找到相關地區</p>
           </div>
         ) : (
           <div 
-             className="relative w-full max-w-5xl h-[450px] flex justify-center items-center mb-4"
+             className={`relative w-full max-w-5xl h-[420px] flex justify-center mb-4 transition-opacity duration-500 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}
              onMouseEnter={() => setIsHovered(true)}
              onMouseLeave={() => setIsHovered(false)}
           >
@@ -319,20 +410,20 @@ const App: React.FC = () => {
              {/* Navigation Buttons */}
              <button 
                 onClick={handlePrev} 
-                className="absolute left-4 md:left-10 z-40 p-3 rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md border border-white/20 transition-all hover:scale-110 active:scale-95"
+                className="absolute left-4 md:left-10 top-1/2 -translate-y-1/2 z-40 p-3 rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md border border-white/20 transition-all hover:scale-110 active:scale-95"
              >
                 <ChevronLeft className="w-8 h-8" />
              </button>
              
              <button 
                 onClick={handleNext} 
-                className="absolute right-4 md:right-10 z-40 p-3 rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md border border-white/20 transition-all hover:scale-110 active:scale-95"
+                className="absolute right-4 md:right-10 top-1/2 -translate-y-1/2 z-40 p-3 rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md border border-white/20 transition-all hover:scale-110 active:scale-95"
              >
                 <ChevronRight className="w-8 h-8" />
              </button>
 
              {/* Cards Container */}
-             <div className="relative w-full h-full flex justify-center items-center perspective-[1000px]">
+             <div className="relative w-full h-full flex justify-center perspective-[1000px]">
                 {filteredData.map((item, index) => {
                   return (
                     <div
@@ -340,7 +431,6 @@ const App: React.FC = () => {
                       style={getCardStyle(index)}
                       className="origin-center"
                       onClick={() => {
-                        // Click side card to navigate
                         if (index !== currentIndex) {
                             setCurrentIndex(index);
                             setIsAutoPlaying(false);
@@ -352,33 +442,31 @@ const App: React.FC = () => {
                   );
                 })}
              </div>
+
+            {/* Navigation Dots - Positioned inside container at bottom */}
+             <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-2 z-50 px-4 overflow-x-auto no-scrollbar pointer-events-auto pb-2">
+                {filteredData.map((_, idx) => (
+                    <button
+                    key={idx}
+                    onClick={() => {
+                        setCurrentIndex(idx);
+                        setIsAutoPlaying(false);
+                    }}
+                    className={`h-2 rounded-full transition-all duration-300 shadow-lg ${
+                        idx === currentIndex ? 'w-8 bg-white shadow-white/50' : 'w-2 bg-white/40 hover:bg-white/60'
+                    }`}
+                    />
+                ))}
+             </div>
           </div>
         )}
         
-         {/* Navigation Dots - Moved closer with negative margin */}
-        {!loading && filteredData.length > 0 && (
-            <div className="w-full flex justify-center gap-2 z-30 px-4 overflow-x-auto no-scrollbar mb-6 -mt-24 relative pointer-events-auto">
-            {filteredData.map((_, idx) => (
-                <button
-                key={idx}
-                onClick={() => {
-                    setCurrentIndex(idx);
-                    setIsAutoPlaying(false);
-                }}
-                className={`h-2 rounded-full transition-all duration-300 shadow-lg ${
-                    idx === currentIndex ? 'w-8 bg-white shadow-white/50' : 'w-2 bg-white/40 hover:bg-white/60'
-                }`}
-                />
-            ))}
-            </div>
-        )}
-
         {/* Weekly Forecast Section */}
-        {!loading && filteredData.length > 0 && (
+        {!loading && filteredData.length > 0 && !isTransitioning && (
             <div className="w-full z-20">
                 <WeeklyForecast 
-                  data={weeklyData} 
-                  locationName={filteredData[currentIndex]?.locationName}
+                  data={currentWeeklyData} 
+                  locationName={currentCityName}
                 />
             </div>
         )}

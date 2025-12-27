@@ -16,7 +16,12 @@ const DayColumn: React.FC<{ dayData: DailyForecast }> = ({ dayData }) => {
 
   // Styling helper
   const Slot = ({ part }: { part?: any }) => {
-    if (!part) return <div className="flex-1 bg-white/5 rounded-xl m-1"></div>;
+    // If data is missing (e.g. past time or API gap), show a subtle placeholder
+    if (!part) return (
+        <div className="flex-1 bg-white/5 rounded-xl m-1 flex items-center justify-center">
+             <span className="text-white/30 text-xs">-</span>
+        </div>
+    );
     
     const isHot = part.temp >= 28;
     const bgClass = part.type === 'day' 
