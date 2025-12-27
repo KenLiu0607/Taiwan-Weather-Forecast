@@ -1,0 +1,202 @@
+@import "tailwindcss";
+
+body {
+    font-family: 'Noto Sans TC', sans-serif;
+    margin: 0;
+    overflow-x: hidden;
+}
+
+/* Floating Clouds */
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0px) translateX(0px);
+    }
+
+    50% {
+        transform: translateY(-20px) translateX(10px);
+    }
+}
+
+@keyframes float-reverse {
+
+    0%,
+    100% {
+        transform: translateY(0px) translateX(0px);
+    }
+
+    50% {
+        transform: translateY(15px) translateX(-10px);
+    }
+}
+
+/* Rain */
+@keyframes rain-drop {
+    0% {
+        transform: translateY(-10vh) scaleY(1);
+        opacity: 0;
+    }
+
+    10% {
+        opacity: 0.8;
+    }
+
+    90% {
+        opacity: 0.8;
+        transform: translateY(90vh) scaleY(1);
+    }
+
+    100% {
+        transform: translateY(100vh) scaleY(0.5);
+        opacity: 0;
+    }
+}
+
+/* Sun Rays */
+@keyframes spin-slow {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes pulse-sun {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 1;
+    }
+}
+
+/* --- Transition Animations (Sun to Moon) --- */
+/* New Path: Top-Right -> Arc -> Top-Left */
+
+/* X-Axis: Linear movement from Right to Left */
+@keyframes celestial-move-x {
+    0% {
+        transform: translateX(100vw);
+    }
+
+    100% {
+        transform: translateX(-20vw);
+    }
+}
+
+/* Y-Axis: Arc effect (Up then Down, or slight dip) */
+@keyframes celestial-move-y {
+    0% {
+        transform: translateY(20vh);
+    }
+
+    50% {
+        transform: translateY(5vh);
+    }
+
+    /* Peak of arc */
+    100% {
+        transform: translateY(20vh);
+    }
+}
+
+/* Morphing: Color and Shadow change from Sun (Yellow/Orange) to Moon (White/Blue) */
+@keyframes celestial-morph-color {
+    0% {
+        color: #FDB813;
+        /* Sun Yellow */
+        filter: drop-shadow(0 0 40px rgba(253, 184, 19, 0.8));
+    }
+
+    40% {
+        color: #FF8C00;
+        /* Sunset Orange */
+        filter: drop-shadow(0 0 50px rgba(255, 69, 0, 0.9));
+    }
+
+    100% {
+        color: #F0F8FF;
+        /* Moon White */
+        filter: drop-shadow(0 0 30px rgba(200, 230, 255, 0.9));
+    }
+}
+
+/* Background: Fade from Transparent (Current) to Dark Night */
+@keyframes sky-darken {
+    0% {
+        background-color: rgba(0, 0, 0, 0);
+        backdrop-filter: blur(0px);
+    }
+
+    30% {
+        background-color: rgba(135, 206, 235, 0.3);
+        backdrop-filter: blur(2px);
+    }
+
+    100% {
+        background-color: #0f172a;
+        backdrop-filter: blur(10px);
+    }
+
+    /* Slate-900 */
+}
+
+.animate-float {
+    animation: float 6s ease-in-out infinite;
+}
+
+.animate-float-reverse {
+    animation: float-reverse 4s ease-in-out infinite;
+}
+
+.animate-rain {
+    animation: rain-drop 1s linear infinite;
+}
+
+.animate-spin-slow {
+    animation: spin-slow 30s linear infinite;
+}
+
+.animate-pulse-sun {
+    animation: pulse-sun 4s ease-in-out infinite;
+}
+
+/* Animation Classes for JS triggering */
+.anim-celestial-x {
+    animation: celestial-move-x 2.5s linear forwards;
+}
+
+.anim-celestial-y {
+    animation: celestial-move-y 2.5s ease-in-out forwards;
+}
+
+.anim-celestial-morph {
+    animation: celestial-morph-color 2.5s ease-in-out forwards;
+}
+
+.anim-sky-darken {
+    animation: sky-darken 2.5s ease-in-out forwards;
+}
+
+/* Hide scrollbar */
+::-webkit-scrollbar {
+    width: 0px;
+    background: transparent;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
